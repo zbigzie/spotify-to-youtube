@@ -1,0 +1,20 @@
+# Personal data must stay outside the public repository.
+.private/
+.state/
+.env*
+*.json
+*.csv
+*.sqlite*
+*.db
+*.png
+*.zip
+*token*
+*secret*
+.cache*
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.DS_Store
