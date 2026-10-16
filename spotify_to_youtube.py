@@ -117,8 +117,13 @@ def import_tracks(state, rows):
         track = {"position": position, "title": row["title"], "artists": row["artists"],
                  "album": row.get("album", ""), "duration": seconds(row.get("duration")),
                  "spotify_url": row.get("spotifyUrl", ""), "status": "pending", "candidates": []}
+        if isinstance(row.get("explicit"), bool):
+            track["explicit"] = row["explicit"]
+        elif isinstance(row.get("raw"), str):
+            track["explicit"] = "E" in row["raw"].splitlines()
         if row.get("youtubeUrl") and row.get("status") in {"added", "duplicate", "matched", "approved"}:
-            track.update(video_id=youtube_id(row["youtubeUrl"]), status="approved", approval="imported match")
+            status = row["status"] if row["status"] in {"added", "duplicate"} else "approved"
+            track.update(video_id=youtube_id(row["youtubeUrl"]), status=status, approval="imported match")
         tracks.append(track)
     state.data.update(tracks=tracks, source_total=len(tracks), source_complete=True)
     state.save()
@@ -285,6 +290,8 @@ def apply(state, api, playlist, channel, execute=False, limit=25, retry_position
             state.save()
         if track["status"] == "inflight":
             raise StopTransfer(f"Track {track['position']} has an unknown insert outcome. Inspect YouTube, wait, then explicitly use --retry-position {track['position']} if absent.")
+        if track["status"] != "approved":
+            continue
         if video in planned or additions >= limit:
             continue
         if not execute:

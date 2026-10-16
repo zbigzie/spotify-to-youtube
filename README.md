@@ -46,7 +46,9 @@ No Spotify authorization is needed for import. Save a JSON array outside the che
 spotify-to-youtube import /path/to/private/songs.json
 ```
 
-`title` and `artists` are required; album and duration improve matching. The importer also accepts a browser-transfer ledger with `youtubeUrl` and status `added`, `duplicate`, `matched`, or `approved`. Those matches become local approvals and are verified against the destination on `apply`. Import only trusted files. Completeness of an imported list is the caller's responsibility.
+`title` and `artists` are required; album and duration improve matching. An optional Boolean `explicit` flag is retained for review. Browser-ledger `raw` text can also supply the explicit marker as a standalone `E` line.
+
+The importer accepts a browser-transfer ledger with `youtubeUrl` and status `added`, `duplicate`, `matched`, or `approved`. Completed entries retain their status; other matches become local approvals. `apply` reconciles them against the destination. If a previously completed video is absent, the tool stops for inspection instead of silently inserting it again. Import only trusted files. Completeness of an imported list is the caller's responsibility.
 
 ### Or export Spotify liked songs
 
@@ -70,6 +72,8 @@ spotify-to-youtube account
 Check the channel name and copy its ID for `--channel`. Choose the correct channel if you use a Brand Account. OAuth uses a temporary loopback callback; the refresh token is stored locally. Testing-mode grants may expire, requiring `auth` again.
 
 Google requires a broad YouTube write scope, `youtube.force-ssl`, for playlist insertion. Its consent screen describes capabilities beyond the subset used here. This tool only reads channels/playlists/videos and creates playlists/inserts playlist items. There is no playlist-only OAuth grant. Review the consent screen before authorizing.
+
+Keep credentials out of chat, screenshots, issue reports, and Git. If Google shows first-use terms, review them yourself. A Google Cloud free-trial or billing signup is not part of this tool's authorization flow; stop if setup unexpectedly asks for payment details.
 
 ## 3. Search and approve recordings
 
@@ -129,5 +133,17 @@ python -m unittest discover -s tests -v
 ```
 
 Tests use synthetic songs and fake APIs, with no credentials or network. Before publishing, inspect `git diff --cached` and `git ls-files`; never include real library files or tokens. See [SECURITY.md](SECURITY.md). Licensed under [MIT](LICENSE). Not affiliated with Spotify or YouTube. This transfers playlist references, not audio files.
+
+## Troubleshooting
+
+| Message or symptom | Next step |
+| --- | --- |
+| Run auth with your own Google Desktop OAuth client first | Run `auth --client-secrets` with your local client JSON, then verify the channel with `account`. Browser sign-in alone does not authorize this CLI. |
+| Account differs or playlist belongs to another channel | Check `account`, the selected Brand Account, and the destination URL. Do not create another playlist to work around an account mismatch. |
+| Unknown insert outcome | Keep the state directory. Run a dry run to reconcile; use `--retry-position` only after confirming the video is absent. |
+| HTTP 403 or quota error | Inspect the project's API quota and authorization. A 403 alone does not identify its cause. Resume after the underlying issue is resolved. |
+| Browser tab crashes during setup | Reload that tab or compare the official URL in another browser. A browser crash does not prove the API or your network is down. |
+
+When asking for help, share the command name, error type/HTTP code, and whether it was a dry run. Redact personal song lists, channel identifiers, OAuth URLs, and credential files.
 
 References: [Spotify saved tracks](https://developer.spotify.com/documentation/web-api/reference/get-users-saved-tracks), [Spotipy PKCE](https://spotipy.readthedocs.io/en/latest/#spotipy.oauth2.SpotifyPKCE), [Google desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app).

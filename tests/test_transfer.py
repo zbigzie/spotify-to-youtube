@@ -69,8 +69,35 @@ class TransferTests(unittest.TestCase):
         self.state = tool.State(self.temp.name)
 
     def imported(self, videos=(VIDEO,)):
-        tool.import_tracks(self.state, [dict(source(), status="added",
+        tool.import_tracks(self.state, [dict(source(), status="matched",
             youtubeUrl="https://www.youtube.com/watch?v=" + v) for v in videos])
+
+    def test_imported_completed_insert_is_not_silently_repeated(self):
+        tool.import_tracks(self.state, [dict(source(), status="added",
+            youtubeUrl="https://www.youtube.com/watch?v=" + VIDEO)])
+        api = FakeAPI()
+        with self.assertRaises(tool.StopTransfer):
+            tool.apply(self.state, api, "PLexample", "channel", execute=True)
+        self.assertEqual(api.inserted, [])
+        self.assertEqual(self.state.data["tracks"][0]["status"], "inflight")
+        api.existing.add(VIDEO)
+        tool.apply(tool.State(self.temp.name), api, "PLexample", "channel", execute=True)
+        self.assertEqual(api.inserted, [])
+
+    def test_import_retains_clean_and_explicit_source_flags(self):
+        tool.import_tracks(self.state, [dict(source(), explicit=False),
+            dict(source(), explicit=True), dict(source(), raw="Song\nE\nArtist"),
+            dict(source(), raw="Song\nArtist"), source()])
+        tracks = self.state.data["tracks"]
+        self.assertEqual([t["explicit"] for t in tracks[:4]], [False, True, True, False])
+        self.assertNotIn("explicit", tracks[4])
+
+    def test_unapproved_video_id_cannot_trigger_an_insert(self):
+        self.imported()
+        self.state.data["tracks"][0]["status"] = "uncertain"
+        api = FakeAPI()
+        self.assertEqual(tool.apply(self.state, api, "PLexample", "channel", execute=True), 0)
+        self.assertEqual(api.inserted, [])
 
     def test_import_preserves_version_and_requires_reconciliation(self):
         self.imported()
