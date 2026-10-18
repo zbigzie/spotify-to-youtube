@@ -1,13 +1,81 @@
 import copy
+import contextlib
+import io
+import json
 import tempfile
 import types
 import sys
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
 import spotify_to_youtube as tool
 
 VIDEO, OTHER = "abcdefghijk", "lmnopqrstuv"
+
+
+class FakeHttpError(Exception):
+    def __init__(self, content, headers=None, status=429):
+        super().__init__("SECRET exception message and request URL")
+        self.content = content
+        self.resp = type("Response", (dict,), {})(headers or {})
+        self.resp.status = status
+
+
+class ErrorLoggingTests(unittest.TestCase):
+    def test_only_allowlisted_fields_survive(self):
+        error = FakeHttpError(json.dumps({"error": {
+            "message": "SECRET body", "status": "RESOURCE_EXHAUSTED",
+            "errors": [{"reason": "rateLimitExceeded", "message": "SECRET"},
+                       {"reason": "SECRET arbitrary reason"}],
+            "details": [{"reason": "RATE_LIMIT_EXCEEDED", "metadata": {"token": "SECRET"}}]}}),
+            {"retry-after": "120", "Authorization": "Bearer SECRET", "Set-Cookie": "SECRET"})
+        result = tool.safe_api_error(error, "search")
+        self.assertEqual(result["http_status"], 429)
+        self.assertEqual(result["reasons"], ["RATE_LIMIT_EXCEEDED", "rateLimitExceeded"])
+        self.assertEqual(result["retry_after_seconds"], 120)
+        self.assertEqual(result["api_status"], "RESOURCE_EXHAUSTED")
+        self.assertNotIn("SECRET", json.dumps(result))
+
+    def test_http_date_retry_after_is_canonical(self):
+        error = FakeHttpError(b'{}', {"Retry-After": "Sun, 18 Oct 2026 02:00:00 GMT"})
+        result = tool.safe_api_error(error, "search")
+        self.assertEqual(result["retry_after_utc"], "2026-10-18T02:00:00+00:00")
+        self.assertIsNone(result["retry_after_seconds"])
+
+    def test_429_alone_does_not_imply_daily_quota(self):
+        result = tool.safe_api_error(FakeHttpError(b'{}'), "search")
+        self.assertEqual(result["http_status"], 429)
+        self.assertEqual(result["reasons"], [])
+        self.assertIsNone(result["retry_after_seconds"])
+        self.assertIsNone(result["retry_after_utc"])
+
+    def test_malformed_or_oversized_content_and_headers_are_not_logged(self):
+        for content in [b'not JSON SECRET', b'[]', b'{"error":null}',
+                        b'{"error":{"errors":"SECRET","status":[]}}', b'SECRET' * 12000]:
+            result = tool.safe_api_error(FakeHttpError(content,
+                {"retry-after": "SECRET\nAuthorization: token"}, status="SECRET"), "search")
+            self.assertNotIn("SECRET", json.dumps(result))
+            self.assertIsNone(result["http_status"])
+            self.assertIsNone(result["retry_after_seconds"])
+            self.assertIsNone(result["retry_after_utc"])
+
+    def test_cli_saves_private_diagnostics_without_retry_or_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            error = FakeHttpError(b'{"error":{"errors":[{"reason":"quotaExceeded"}]}}',
+                                  {"retry-after": "900"}, status=403)
+            stderr = io.StringIO()
+            with patch.object(tool, "run", side_effect=error) as run, contextlib.redirect_stderr(stderr):
+                code = tool.main(["--state", directory, "search", "--limit", "1"])
+            self.assertEqual(code, 1)
+            run.assert_called_once()
+            path = Path(directory) / "last-api-error.json"
+            result = json.loads(path.read_text())
+            self.assertEqual(result["reasons"], ["quotaExceeded"])
+            self.assertEqual(result["retry_after_seconds"], 900)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("SECRET", path.read_text() + stderr.getvalue())
+            self.assertFalse((Path(directory) / "state.json").exists())
 
 
 def source():

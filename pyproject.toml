@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spotify-to-youtube-local"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local, resumable Spotify liked-songs to private YouTube playlist transfer"
 readme = "README.md"
 requires-python = ">=3.10"

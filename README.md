@@ -2,7 +2,7 @@
 
 A local Python CLI that helps move **Spotify liked songs** into a **private YouTube playlist**. Export your library or import a JSON list, review recording matches, then add videos in resumable batches.
 
-**Early release:** offline recovery and matching tests pass. Live OAuth and end-to-end API transfer have not been verified for this release. Users supply their own developer applications. Matching uses metadata, not audio fingerprints.
+**Early release:** Google OAuth, search, private playlist insertion, and destination verification have been exercised with a live account. Spotify export and failure recovery are covered by offline tests; live Spotify export has not been verified. Users supply their own developer applications. Matching uses metadata, not audio fingerprints.
 
 ## Features
 
@@ -10,6 +10,7 @@ A local Python CLI that helps move **Spotify liked songs** into a **private YouT
 - Local imports, saved search candidates, manual approval, and optional strict matching against explicitly trusted channels.
 - Private playlists, account/ownership checks, duplicate prevention, and verification after upload batches.
 - Atomic checkpoints and recovery after dropped connections. Unknown write outcomes stop for reconciliation rather than retrying automatically.
+- Persistent cooldowns, sanitized API diagnostics, and reusable search results to reduce wasted requests.
 - No hosted transfer service, telemetry, browser-cookie extraction, Spotify modifications, or deletion of YouTube content.
 
 ## Install
@@ -124,7 +125,18 @@ Use one process/state directory per playlist and avoid simultaneous editing else
 
 ## Quotas and failures
 
-YouTube API quotas limit both search and insertion. Large libraries may require multiple quota windows. Check your project's quota console and current [search limits](https://developers.google.com/youtube/v3/docs/search/list) and [insertion cost](https://developers.google.com/youtube/v3/docs/playlistItems/insert). The tool does not rotate projects or evade quotas. API failures stop with saved progress and no automatic write retry. Resolve connectivity, wait for quota reset, or renew authorization, then resume.
+YouTube API quotas limit both search and insertion. Large libraries may require multiple quota windows. Check your project's quota console and current [quota rules](https://developers.google.com/youtube/data/determine_quota_cost). The tool does not rotate projects or evade quotas.
+
+On an API failure the command stops, saves progress, and prints a sanitized diagnosis. It never automatically repeats the failed request. Resume the same command after the reported time; launching it early stops locally before calling that API resource. `status` works offline and shows saved cooldowns.
+
+- HTTP 429 and recognized rate-limit reasons use exponential cooldowns starting at 60 seconds, with up to 25% jitter, capped at one hour. Consecutive failures persist across restarts. An unrelated successful request does not reset a search cooldown.
+- An explicit `quotaExceeded` or `dailyLimitExceeded` reason defers until the next midnight in Pacific time, the documented daily quota reset. This is an earliest retry time, not a guarantee that a project's quota will become available. A 429 or 403 alone does not establish daily quota exhaustion.
+- A valid `Retry-After` delay or HTTP date is always a minimum, even when longer than the local backoff cap. Malformed values are ignored. Server errors 500/502/503/504 also use exponential cooldowns; authorization failures require inspection.
+- Search and other API calls have separate cooldown buckets. Calls within a command are paced at least one second apart. There are no background retries or project switching.
+
+Search responses are checkpointed before video details are fetched. If a details request fails, resuming reuses the successful search. Complete candidates, including empty results, are cached for 24 hours; `search --position N` reuses fresh saved results. Use `--refresh` to request fresh results explicitly; it still honors cooldowns. Cache reuse does not extend its expiry. Destination membership is always fetched afresh before insertion.
+
+Ctrl-C exits with code 130 and retains progress. An interrupted write is reconciled on the next run and is never automatically replayed merely because a cooldown expired. Keep the entire private state directory, including the ledger, search cache, and API-limit checkpoint. Deleting cooldown files to force retries can worsen throttling.
 
 ## Development
 
@@ -142,8 +154,9 @@ Tests use synthetic songs and fake APIs, with no credentials or network. Before 
 | Account differs or playlist belongs to another channel | Check `account`, the selected Brand Account, and the destination URL. Do not create another playlist to work around an account mismatch. |
 | Unknown insert outcome | Keep the state directory. Run a dry run to reconcile; use `--retry-position` only after confirming the video is absent. |
 | HTTP 403 or quota error | Inspect the project's API quota and authorization. A 403 alone does not identify its cause. Resume after the underlying issue is resolved. |
+| HTTP 429 / requests paused | Read `status` and the reported earliest retry time. Wait, then resume the same command. No daily reset is inferred from 429 alone. |
 | Browser tab crashes during setup | Reload that tab or compare the official URL in another browser. A browser crash does not prove the API or your network is down. |
 
-When asking for help, share the command name, error type/HTTP code, and whether it was a dry run. Redact personal song lists, channel identifiers, OAuth URLs, and credential files.
+When asking for help, share the command name, HTTP code, allowlisted reason, and retry time from `last-api-error.json`, plus whether it was a dry run. Diagnostics exclude response bodies, request URLs, tokens, and arbitrary server messages. Keep other state files private: the search cache contains song queries and metadata. Redact personal song lists, channel identifiers, OAuth URLs, and credential files.
 
 References: [Spotify saved tracks](https://developer.spotify.com/documentation/web-api/reference/get-users-saved-tracks), [Spotipy PKCE](https://spotipy.readthedocs.io/en/latest/#spotipy.oauth2.SpotifyPKCE), [Google desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app).
